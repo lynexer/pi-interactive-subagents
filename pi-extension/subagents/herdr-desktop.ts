@@ -26,6 +26,7 @@
 import { execFile, execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promisify } from "node:util";
+import { bashPosixScriptPath, resolveBash } from "./bash.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -182,10 +183,21 @@ export function createDesktopSurface(title: string, kind: "tab" | "pane"): strin
  */
 export function launchArgv(
   scriptPath: string,
-  options: { shell?: string; platform?: NodeJS.Platform } = {},
+  options: {
+    shell?: string;
+    platform?: NodeJS.Platform;
+    /** Bash binary that runs a Windows launch script (injected for tests). */
+    bashPath?: string;
+    /** POSIX form of `scriptPath` as that bash sees it (injected for tests). */
+    posixScriptPath?: string;
+  } = {},
 ): string[] {
   const platform = options.platform ?? process.platform;
-  if (platform === "win32") return ["bash", scriptPath];
+  if (platform === "win32") {
+    const bash = options.bashPath ?? resolveBash();
+    const posix = options.posixScriptPath ?? bashPosixScriptPath(scriptPath) ?? scriptPath;
+    return [bash, posix];
+  }
   const shell = options.shell?.trim() || "/bin/sh";
   return [shell, "-l", "-i", "-c", `exec bash ${quote(scriptPath)}`];
 }
