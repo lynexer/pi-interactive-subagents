@@ -218,13 +218,23 @@ function getToolExtensionPath(tool: string): string | undefined {
   if ((SPAWNING_TOOLS as readonly string[]).includes(tool)) {
     return fileURLToPath(import.meta.url);
   }
-  const extBase = join(getAgentConfigDir(), "extensions");
+  // pi-web-access is one extension that registers web_search, source_check,
+  // fetch_content and get_search_content. All of those tool names map to its
+  // single entry point, so a child loads it once via -e and `--tools` narrows
+  // which tools are actually exposed.
+  const piWebAccess = join(
+    getAgentConfigDir(),
+    "npm",
+    "node_modules",
+    "pi-web-access",
+    "dist",
+    "index.js",
+  );
   const map: Record<string, string> = {
-    web_search: join(extBase, "web-search", "index.ts"),
-    web_fetch: join(extBase, "web-fetch", "index.ts"),
-    video_extract: join(extBase, "video-extract", "index.ts"),
-    youtube_search: join(extBase, "youtube-search", "index.ts"),
-    google_image_search: join(extBase, "google-image-search", "index.ts"),
+    web_search: piWebAccess,
+    source_check: piWebAccess,
+    fetch_content: piWebAccess,
+    get_search_content: piWebAccess,
     safe_bash: join(SUBAGENTS_DIR, "tools", "safe-bash.ts"),
   };
   // Prefer the built-in path, but fall back to a runtime-registered extension
@@ -233,6 +243,24 @@ function getToolExtensionPath(tool: string): string | undefined {
   const builtin = map[tool];
   if (builtin && existsSync(builtin)) return builtin;
   return EXTRA_TOOL_EXTENSIONS.get(tool);
+}
+
+/**
+ * Extensions that must be loaded into every restricted subagent regardless of
+ * its tool allowlist:
+ *   - pi-profiles registers the profile's model provider keys (API keys / OAuth)
+ *     so the child process can actually reach its model provider.
+ *   - pi-cloak redacts secrets from read/bash/grep output.
+ *
+ * Both live under the global agent dir's package install paths. Only paths that
+ * exist on disk are returned, so an uninstalled package never breaks spawning.
+ */
+function getSharedSubagentExtensionPaths(): string[] {
+  const agentDir = getAgentConfigDir();
+  return [
+    join(agentDir, "git", "github.com", "lynexer", "pi-profiles", "src", "index.ts"),
+    join(agentDir, "npm", "node_modules", "@nicknisi", "pi-cloak", "index.ts"),
+  ].filter((path) => existsSync(path));
 }
 
 /**
@@ -315,6 +343,9 @@ function parseSessionMode(value: string | undefined): SubagentSessionMode | unde
 }
 
 function parseAgentDefinition(content: string, fallbackName: string): AgentDefinition | null {
+  // Agent files checked out with CRLF line endings (e.g. a Windows git clone
+  // with core.autocrlf=true) would otherwise fail the `\n` frontmatter match.
+  content = content.replace(/\r\n/g, "\n");
   const match = content.match(/^---\n([\s\S]*?)\n---/);
   if (!match) return null;
 
@@ -915,6 +946,9 @@ function applySandboxToParts(
     }
     const authExtPath = getProviderAuthExtensionPath(loadout.model);
     if (authExtPath) extPaths.add(authExtPath);
+    for (const extPath of getSharedSubagentExtensionPaths()) {
+      extPaths.add(extPath);
+    }
     for (const extPath of extPaths) {
       parts.push("-e", shellEscape(extPath));
     }
