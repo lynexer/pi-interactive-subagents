@@ -1217,16 +1217,30 @@ describe("subagent discovery", () => {
     }
   });
 
+  it("parses agent frontmatter with CRLF line endings (Windows checkouts)", async () => {
+    await withIsolatedAgentEnv(({ projectAgentsDir }) => {
+      writeFileSync(
+        join(projectAgentsDir, "crlf-agent.md"),
+        "---\r\nname: crlf-agent\r\nmodel: deepseek/deepseek-flash\r\nauto-exit: true\r\n---\r\n\r\nYou are a CRLF test agent.\r\n",
+      );
+      const loaded = testApi.loadAgentDefaults("crlf-agent");
+      assert.ok(loaded, "expected a CRLF agent file to be discoverable");
+      assert.equal(loaded.model, "deepseek/deepseek-flash");
+    });
+  });
+
   it("getToolExtensionPath maps custom tools and skips built-ins", async () => {
     await withIsolatedAgentEnv(({ globalDir }) => {
-      const webSearchDir = join(globalDir, "extensions", "web-search");
-      mkdirSync(webSearchDir, { recursive: true });
-      writeFileSync(join(webSearchDir, "index.ts"), "");
+      const piWebAccess = join(globalDir, "npm", "node_modules", "pi-web-access", "dist", "index.js");
+      mkdirSync(dirname(piWebAccess), { recursive: true });
+      writeFileSync(piWebAccess, "");
 
       assert.equal(testApi.getToolExtensionPath("read"), undefined);
       assert.equal(testApi.getToolExtensionPath("bash"), undefined);
-      assert.ok(testApi.getToolExtensionPath("web_search")?.endsWith("web-search/index.ts"));
-      assert.ok(testApi.getToolExtensionPath("safe_bash")?.endsWith("tools/safe-bash.ts"));
+      assert.ok(testApi.getToolExtensionPath("web_search")?.endsWith(join("pi-web-access", "dist", "index.js")));
+      assert.ok(testApi.getToolExtensionPath("fetch_content")?.endsWith(join("pi-web-access", "dist", "index.js")));
+      assert.ok(testApi.getToolExtensionPath("source_check")?.endsWith(join("pi-web-access", "dist", "index.js")));
+      assert.ok(testApi.getToolExtensionPath("safe_bash")?.endsWith(join("tools", "safe-bash.ts")));
       // Spawning tools are registered by this extension itself.
       assert.ok(testApi.getToolExtensionPath("subagent")?.endsWith("index.ts"));
     });
@@ -1364,6 +1378,29 @@ describe("subagent discovery", () => {
     });
   }
 
+  function withSharedSubagentExtensions(
+    install: boolean,
+    run: (paths: { profilesPath: string; cloakPath: string }) => void,
+  ) {
+    withTempDir((dir) => {
+      const previous = process.env.PI_CODING_AGENT_DIR;
+      process.env.PI_CODING_AGENT_DIR = dir;
+      const profilesPath = join(dir, "git", "github.com", "lynexer", "pi-profiles", "src", "index.ts");
+      const cloakPath = join(dir, "npm", "node_modules", "@nicknisi", "pi-cloak", "index.ts");
+      if (install) {
+        mkdirSync(dirname(profilesPath), { recursive: true });
+        writeFileSync(profilesPath, "export default () => {};", "utf8");
+        mkdirSync(dirname(cloakPath), { recursive: true });
+        writeFileSync(cloakPath, "export default () => {};", "utf8");
+      }
+      try {
+        run({ profilesPath, cloakPath });
+      } finally {
+        restoreEnvVar("PI_CODING_AGENT_DIR", previous);
+      }
+    });
+  }
+
   function sandboxPartsForModel(model: string, artifactDir: string): string[] {
     const parts: string[] = [];
     testApi.applySandboxToParts(
@@ -1455,6 +1492,61 @@ describe("subagent discovery", () => {
         { artifactDir: d, name: "fork" },
       );
       assert.deepEqual(parts, []);
+    });
+  });
+
+  it("applySandboxToParts loads pi-profiles and pi-cloak into every restricted subagent", () => {
+    withSharedSubagentExtensions(true, ({ profilesPath, cloakPath }) => {
+      withTempDir((artifactDir) => {
+        const parts: string[] = [];
+        testApi.applySandboxToParts(
+          parts,
+          {
+            agent: "worker",
+            toolAllowlist: "read",
+            model: null,
+            thinking: null,
+            systemPromptMode: null,
+            identity: null,
+            spawnable: null,
+            autoExit: true,
+            cwd: null,
+            agentDir: null,
+          },
+          { artifactDir, name: "worker" },
+        );
+        const joined = parts.join(" ");
+        assert.ok(joined.includes(profilesPath), "expected pi-profiles to be passed with -e");
+        assert.ok(joined.includes(cloakPath), "expected pi-cloak to be passed with -e");
+      });
+    });
+  });
+
+  it("applySandboxToParts still launches when pi-profiles/pi-cloak are absent", () => {
+    withSharedSubagentExtensions(false, ({ profilesPath, cloakPath }) => {
+      withTempDir((artifactDir) => {
+        const parts: string[] = [];
+        testApi.applySandboxToParts(
+          parts,
+          {
+            agent: "worker",
+            toolAllowlist: "read",
+            model: null,
+            thinking: null,
+            systemPromptMode: null,
+            identity: null,
+            spawnable: null,
+            autoExit: true,
+            cwd: null,
+            agentDir: null,
+          },
+          { artifactDir, name: "worker" },
+        );
+        const joined = parts.join(" ");
+        assert.ok(!joined.includes(profilesPath), "expected no -e for absent pi-profiles");
+        assert.ok(!joined.includes(cloakPath), "expected no -e for absent pi-cloak");
+        assert.ok(parts.includes("--no-extensions"), "expected the sandbox to be built regardless");
+      });
     });
   });
 
@@ -2966,7 +3058,15 @@ describe("herdr-desktop.ts", () => {
       ["/bin/zsh", "-l", "-i", "-c", "exec bash '/tmp/it'\\''s.sh'"],
     );
     assert.equal(launchArgv("/s.sh", { platform: "linux" })[0], "/bin/sh", "no $SHELL falls back to sh");
-    assert.deepEqual(launchArgv("C:\\s.sh", { platform: "win32" }), ["bash", "C:\\s.sh"]);
+    assert.deepEqual(
+      launchArgv("C:\\s.sh", {
+        platform: "win32",
+        bashPath: "C:\\Program Files\\Git\\bin\\bash.exe",
+        posixScriptPath: "/c/s.sh",
+      }),
+      ["C:\\Program Files\\Git\\bin\\bash.exe", "/c/s.sh"],
+      "Windows launch runs the script through Git Bash with its POSIX path",
+    );
   });
 
   it("knows a subagent ended from herdr-core's record, not its screen", () => {
