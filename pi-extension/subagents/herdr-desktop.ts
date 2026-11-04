@@ -6,25 +6,23 @@
  * `hc` CLI. It exports `HC_TERMINAL_ID` (e.g. `t2`) into each terminal instead
  * of the `HERDR_*` variables the Herdr TUI sets.
  *
- * A terminal joins the window wherever its `herdr.space` / `herdr.tab` labels
- * point. Starting the subagent with `hc run` and those labels places it
- * without moving the person's focus (`herdr-app do tab.new` and `pane.split`
- * both steal it):
- *   - the main session labels a fresh tab id, which the app turns into a new
- *     tab, then names that tab after the subagent;
- *   - a subagent labels its own tab, which the app shows as a split.
- * hc records the spawning pi as the terminal's parent, so the app's agents
- * list nests subagents under the agent that started them.
+ * A subagent is started with `hc run`, which records the spawning pi's
+ * terminal as the subagent's `parent`. Herdr shows parented terminals as
+ * pane-less sub-agents: they nest under the agent that started them in the
+ * app's Agents list, with no pane of their own. No `herdr.space`/`herdr.tab`
+ * labels are set, so nothing is adopted into a tab (which would make the same
+ * terminal appear twice — once nested, once as a top-level tab agent). The
+ * person opens one from the list (peek) and can promote it to a tab with
+ * keep-as-tab.
  *
- * Unlike the TUI path, nothing is typed into a shell. createSurface only
- * reserves a unique hc terminal name, which is the surface handle. The
- * terminal starts once the launch script exists, running that script through
- * the person's login shell so it sees the same PATH and environment a typed
+ * Nothing is typed into a shell. createSurface only reserves a unique hc
+ * terminal name, which is the surface handle. The terminal starts once the
+ * launch script exists, running that script through the person's login shell
+ * (or Git Bash on Windows) so it sees the same PATH and environment a typed
  * command would. When the script ends, the terminal finishes and the app
- * closes its pane.
+ * closes it.
  */
 import { execFile, execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
 import { promisify } from "node:util";
 import { bashPosixScriptPath, resolveBash } from "./bash.ts";
 
@@ -32,10 +30,6 @@ const execFileAsync = promisify(execFile);
 
 function hcBin(): string {
   return process.env.PI_SUBAGENT_HC_BIN || "hc";
-}
-
-function herdrAppBin(): string {
-  return process.env.PI_SUBAGENT_HERDR_APP_BIN || "herdr-app";
 }
 
 /**
@@ -76,23 +70,6 @@ function hcJson(args: string[]): any {
 
 function quote(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'";
-}
-
-/** The space and tab the window shows a terminal in, from its herdr labels. */
-function placementOf(terminal: string): { space: string; tab: string } | null {
-  try {
-    const labels = hcJson(["get", terminal])?.labels ?? {};
-    const space = labels["herdr.space"];
-    const tab = labels["herdr.tab"];
-    return typeof space === "string" && typeof tab === "string" ? { space, tab } : null;
-  } catch {
-    return null;
-  }
-}
-
-/** A tab id the app has never seen, in its own `tb<hex>` shape. */
-export function freshTabId(): string {
-  return `tb${randomBytes(16).toString("hex")}`;
 }
 
 /**
@@ -136,10 +113,6 @@ function takenNames(): Set<string> {
 }
 
 interface PendingLaunch {
-  title: string;
-  kind: "tab" | "pane";
-  space: string;
-  tab: string;
   cwd: string;
 }
 
@@ -151,27 +124,14 @@ export function isPendingDesktopSurface(surface: string): boolean {
 }
 
 /**
- * Reserve a subagent surface: its placement and a unique hc terminal name,
- * which is the returned handle. The terminal starts in launchDesktopSurface.
- * `kind` "tab" means a new named tab; "pane" a split in the spawning pi's tab.
+ * Reserve a subagent surface: a unique hc terminal name, which is the returned
+ * handle. The terminal starts in launchDesktopSurface. No `herdr.space` /
+ * `herdr.tab` labels are set, so the terminal is a pane-less sub-agent nested
+ * under the spawning pi in the app's Agents list rather than a new tab/pane.
  */
-export function createDesktopSurface(title: string, kind: "tab" | "pane"): string {
-  const self = process.env.HC_TERMINAL_ID?.trim();
-  const placement = self ? placementOf(self) : null;
-  if (!placement) {
-    throw new Error(
-      "Cannot place a subagent: this terminal is not shown in the Herdr desktop app (no herdr.space/herdr.tab labels).",
-    );
-  }
-
+export function createDesktopSurface(title: string): string {
   const handle = uniqueTerminalName(terminalName(title) ?? "subagent", takenNames());
-  pending.set(handle, {
-    title: title.trim() || handle,
-    kind,
-    space: placement.space,
-    tab: kind === "tab" ? freshTabId() : placement.tab,
-    cwd: process.cwd(),
-  });
+  pending.set(handle, { cwd: process.cwd() });
   return handle;
 }
 
@@ -205,8 +165,6 @@ export function launchArgv(
 /** The `hc run` arguments that start a subagent terminal. */
 export function runArgs(options: {
   cwd: string;
-  space: string;
-  tab: string;
   name: string;
   argv: string[];
 }): string[] {
@@ -220,10 +178,6 @@ export function runArgs(options: {
     options.cwd,
     "--name",
     options.name,
-    "--label",
-    `herdr.space=${options.space}`,
-    "--label",
-    `herdr.tab=${options.tab}`,
     "--",
     ...options.argv,
   ];
@@ -236,25 +190,7 @@ export function launchDesktopSurface(surface: string, scriptPath: string): void 
   pending.delete(surface);
 
   const argv = launchArgv(scriptPath, { shell: process.env.SHELL });
-  hcJson(runArgs({ ...launch, name: surface, argv }));
-  if (launch.kind === "tab") void nameTab(launch.tab, launch.title);
-}
-
-/**
- * Name a tab once the app has picked up the new terminal. Best-effort: the
- * window may be closed, and a missing name must never break spawning.
- */
-async function nameTab(tab: string, name: string): Promise<void> {
-  for (let attempt = 0; attempt < 10; attempt++) {
-    try {
-      await execFileAsync(herdrAppBin(), ["do", "tab.rename", "--id", tab, "--name", name], {
-        encoding: "utf8",
-      });
-      return;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-  }
+  hcJson(runArgs({ cwd: launch.cwd, name: surface, argv }));
 }
 
 /** Type a line into a terminal and press Enter. */

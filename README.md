@@ -40,11 +40,11 @@ Steering a running sub-agent goes through `herdr agent prompt`, so the message r
 
 In the Herdr desktop app (`herdr-app`), terminals run in herdr-core and the extension drives the `hc` CLI instead of `herdr`. It detects the app by `HC_TERMINAL_ID`. When pi runs in a Herdr TUI pane inside the app, the TUI path above applies.
 
-- Sub-agents land in the same places: a new named tab for the main session, a split in the parent's tab for nested sub-agents. Neither moves your focus.
+- Sub-agents are pane-less: they nest under the agent that started them in the app's Agents list. Open one from the list to peek at it, and promote it to a tab with keep-as-tab. No new tab or pane is created and your focus never moves.
 - The app's Agents list nests every sub-agent under the agent that started it, with its status.
-- Nothing is typed into a shell. The launch script runs directly through your login shell, so the pane opens straight into pi with your usual `PATH`. The 500 ms shell-ready delay does not apply.
-- The extension learns that a sub-agent ended from herdr-core, not from its screen. The pane closes when the sub-agent exits.
-- The app chooses the split side, so `PI_SUBAGENT_SPLIT_DIRECTION` and the even pane sizing apply to the TUI only.
+- Nothing is typed into a shell. The launch script runs directly through your login shell (Git Bash on Windows), so the terminal opens straight into pi with your usual `PATH`. The 500 ms shell-ready delay does not apply.
+- The extension learns that a sub-agent ended from herdr-core, not from its screen. The terminal closes when the sub-agent exits.
+- `PI_SUBAGENT_TOP_LEVEL_SURFACE` and `PI_SUBAGENT_SPLIT_DIRECTION` don't apply in the desktop app (no tabs or panes are split there); they govern the Herdr TUI only.
 
 If your shell startup is slow and launch commands get dropped before the prompt is ready, raise the delay:
 

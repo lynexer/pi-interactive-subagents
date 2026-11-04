@@ -60,7 +60,6 @@ import safeBashExtension from "../pi-extension/subagents/tools/safe-bash.ts";
 import { __pollForExitTest__, __layoutTest__ } from "../pi-extension/subagents/herdr.ts";
 import {
   exitStateOf,
-  freshTabId,
   isHerdrDesktopEnv,
   lastLines,
   launchArgv,
@@ -3042,12 +3041,11 @@ describe("herdr-desktop.ts", () => {
 
   it("starts subagents without notes, focus or a tie to the parent's lifetime", () => {
     const args = runArgs({
-      cwd: "/repo", space: "sp1", tab: "tb1", name: "scout", argv: ["bash", "/s.sh"],
+      cwd: "/repo", name: "scout", argv: ["bash", "/s.sh"],
     });
     assert.deepEqual(args, [
       "run", "--bg", "--keep", "--no-notify", "--outlive-parent",
       "--cwd", "/repo", "--name", "scout",
-      "--label", "herdr.space=sp1", "--label", "herdr.tab=tb1",
       "--", "bash", "/s.sh",
     ]);
   });
@@ -3077,12 +3075,6 @@ describe("herdr-desktop.ts", () => {
       { finished: true, exitCode: 1 },
       "a killed terminal has no exit code and counts as a failure",
     );
-  });
-
-  it("makes a tab id the app has not seen, so it opens a new tab", () => {
-    const id = freshTabId();
-    assert.match(id, /^tb[0-9a-f]{32}$/);
-    assert.notEqual(id, freshTabId());
   });
 
   it("keeps only the last lines of what hc read prints", () => {

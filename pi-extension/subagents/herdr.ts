@@ -381,7 +381,7 @@ export function planEvenSplits(layout: LayoutSnapshot): ResizeStep[] {
  */
 export function createSurface(name: string): string {
   requireMux();
-  if (isHerdrDesktopAvailable()) return createDesktopSurface(name, chooseSurfaceKind());
+  if (isHerdrDesktopAvailable()) return createDesktopSurface(name);
 
   if (chooseSurfaceKind() === "tab") {
     const pane = createSurfaceTab(name);
